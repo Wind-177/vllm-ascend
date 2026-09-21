@@ -150,7 +150,10 @@ def _chunk_gated_delta_rule_fla_npu(
     # print("q.shape=%s",q.shape)
     # print("k.shape=%s",k.shape)
     # print("v.shape=%s",v.shape)
-    output, final_state ,_ ,_ = fused_fwd(
+    # fla_npu >= v26.9 extends the return ABI from 4 values to 6/10
+    # (training intermediates: beta_eff, h, q_hat, k_hat, q_rstd, k_rstd).
+    # The first two positions (o, final_state) are stable; ignore the rest.
+    output, final_state, *_ = fused_fwd(
         q,
         k,
         v,
