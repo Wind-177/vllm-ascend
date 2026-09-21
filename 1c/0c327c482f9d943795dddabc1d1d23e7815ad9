@@ -1,0 +1,36 @@
+vllm_ascend/ops/gdn.py
+  s_04c59039c7a0a0::t_db1cb2d94cd525 153-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "1c0c327c482f9d943795dddabc1d1d23e7815ad9",
+  "prompts": {},
+  "humans": {
+    "h_42521005812fd7": {
+      "author": "kings177 <kings177@noreply.gitcode.com>"
+    }
+  },
+  "sessions": {
+    "s_04c59039c7a0a0": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa9362da9f2424e08ad8905",
+        "model": "glm-5.3__dev"
+      },
+      "human_author": "kings177 <kings177@noreply.gitcode.com>",
+      "custom_attributes": {
+        "client_type": "ide",
+        "tool_use_id": "6ab10f785e2e3f20faff339a",
+        "external_session_id": "6aa9362da9f2424e08ad8905",
+        "edit_kind": "file_edit",
+        "tool_name": "Edit",
+        "session_id": "6aa9362da9f2424e08ad8905",
+        "source_scene": "agent",
+        "operation_id": "6ab10f785e2e3f20faff339a",
+        "display_model_name": "GLM-5.3",
+        "runtime_client": "trae-tob-git-ai"
+      }
+    }
+  }
+}
