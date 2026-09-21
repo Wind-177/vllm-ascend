@@ -15,6 +15,7 @@
 # This file is a part of the vllm-ascend project.
 #
 
+import inspect
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -1887,6 +1888,26 @@ def _build_qfa_cu_seqlens(cumulative_seq_lengths: list[int], device: torch.devic
 # backend="npugraph_ex", metadata op called INSIDE forward, no .out variant).
 # No task_group/update machinery is needed on our side.
 _QFA_OPS: tuple[Any, Any] | None = None
+_QFA_METADATA_SUPPORTS_V_DESCALE: bool | None = None
+
+
+def _qfa_metadata_supports_v_descale(metadata_op: Any) -> bool:
+    """Return whether this CANN QFA metadata API accepts ``v_descale``.
+
+    Older QFA packages require an E8M0 placeholder at metadata-build time,
+    while the newer CANN 9.2 API removed that argument. The main QFA operator
+    still receives the real V scale; this only selects the metadata API shape.
+    """
+    global _QFA_METADATA_SUPPORTS_V_DESCALE
+    if _QFA_METADATA_SUPPORTS_V_DESCALE is None:
+        try:
+            parameters = inspect.signature(metadata_op).parameters
+        except (TypeError, ValueError):
+            # Keep the established legacy contract for opaque callables.
+            _QFA_METADATA_SUPPORTS_V_DESCALE = True
+        else:
+            _QFA_METADATA_SUPPORTS_V_DESCALE = "v_descale" in parameters
+    return _QFA_METADATA_SUPPORTS_V_DESCALE
 
 
 def _get_qfa_ops() -> tuple[Any, Any]:
@@ -2133,16 +2154,11 @@ class AscendC8MXFPAttentionBackendImpl(AscendAttentionBackendImpl):
             # batch_size must NOT be passed with a TND layout_q (the checker
             # rejects it); the op infers it from cu_seqlens_q.
             _, metadata_op = _get_qfa_ops()
-            metadata = metadata_op(
-                self.num_heads,
-                self.num_kv_heads,
-                self.head_size,
-                QFA_QUANT_MODE_MXFP8,
+            metadata_kwargs = dict(
                 cu_seqlens_q=cu_seqlens_q,
                 cu_seqlens_kv=None,
                 seqused_q=None,
                 seqused_kv=seqused_kv,
-                v_descale=self._qfa_v_descale_placeholder(value_scale_cache),
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=-1,
                 mask_mode=mask_mode,
@@ -2152,6 +2168,17 @@ class AscendC8MXFPAttentionBackendImpl(AscendAttentionBackendImpl):
                 layout_q_descale=layout_q_descale,
                 layout_kv=QFA_LAYOUT_PA_NZ,
                 layout_out=QFA_LAYOUT_TND,
+            )
+            if _qfa_metadata_supports_v_descale(metadata_op):
+                metadata_kwargs["v_descale"] = self._qfa_v_descale_placeholder(
+                    value_scale_cache
+                )
+            metadata = metadata_op(
+                self.num_heads,
+                self.num_kv_heads,
+                self.head_size,
+                QFA_QUANT_MODE_MXFP8,
+                **metadata_kwargs,
             )
             cache[plan_key] = metadata
         return metadata
