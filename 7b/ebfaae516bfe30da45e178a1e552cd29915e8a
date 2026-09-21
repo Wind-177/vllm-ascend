@@ -1,0 +1,40 @@
+vllm_ascend/ascend_config.py
+  s_04c59039c7a0a0::t_e4f901fc78d84e 1590,1598-1600
+  s_04c59039c7a0a0::t_346c74a778bbda 1646-1652
+  s_04c59039c7a0a0::t_2c4f9a20abcd04 1585-1589,1591-1597,1601-1609
+  s_04c59039c7a0a0::t_039e235466d01a 1688-1689
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "7bebfaae516bfe30da45e178a1e552cd29915e8a",
+  "prompts": {},
+  "humans": {
+    "h_42521005812fd7": {
+      "author": "kings177 <kings177@noreply.gitcode.com>"
+    }
+  },
+  "sessions": {
+    "s_04c59039c7a0a0": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa9362da9f2424e08ad8905",
+        "model": "glm-5.3__dev"
+      },
+      "human_author": "kings177 <kings177@noreply.gitcode.com>",
+      "custom_attributes": {
+        "operation_id": "6ab0f3bd5e2e3f20faff3232",
+        "tool_use_id": "6ab0f3bd5e2e3f20faff3232",
+        "client_type": "ide",
+        "source_scene": "unknown",
+        "runtime_client": "trae-tob-git-ai",
+        "dedupe_key": "6aa9362da9f2424e08ad8905:6ab0f3bd5e2e3f20faff3232:afterEdit:0a315f1d",
+        "external_session_id": "6aa9362da9f2424e08ad8905",
+        "tool_type": "agent",
+        "tool_id": "Edit",
+        "session_id": "6aa9362da9f2424e08ad8905",
+        "edit_kind": "file_edit"
+      }
+    }
+  }
+}
