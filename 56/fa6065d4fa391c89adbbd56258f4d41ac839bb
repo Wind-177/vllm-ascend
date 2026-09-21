@@ -1,0 +1,12 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "56fa6065d4fa391c89adbbd56258f4d41ac839bb",
+  "prompts": {},
+  "humans": {
+    "h_42521005812fd7": {
+      "author": "kings177 <kings177@noreply.gitcode.com>"
+    }
+  }
+}
