@@ -1,0 +1,36 @@
+vllm_ascend/models/__init__.py
+  s_04c59039c7a0a0::t_e76caa48bc9421 85-88
+vllm_ascend/models/qwen3_5_mc2.py
+  s_04c59039c7a0a0::t_07fb0b47fa155d 17-28,61
+  s_04c59039c7a0a0::t_9565bf9e01ddd2 142-143,146-148,153-154,157-159
+  s_04c59039c7a0a0::t_8d6d3fa236e481 55-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "dc5a4e4a756b386f2c20ba85a87ee336d1187338",
+  "prompts": {},
+  "sessions": {
+    "s_04c59039c7a0a0": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa9362da9f2424e08ad8905",
+        "model": "glm-5.3"
+      },
+      "human_author": "kings177 <kings177@noreply.gitcode.com>",
+      "custom_attributes": {
+        "tool_id": "SearchReplace",
+        "client_type": "ide",
+        "tool_type": "agent",
+        "runtime_client": "trae-tob-git-ai",
+        "session_id": "6aa9362da9f2424e08ad8905",
+        "dedupe_key": "6aa9362da9f2424e08ad8905:6ab0d3825e2e3f20faff315f:afterEdit:13e985be",
+        "tool_use_id": "6ab0d3825e2e3f20faff315f",
+        "external_session_id": "6aa9362da9f2424e08ad8905",
+        "edit_kind": "file_edit",
+        "operation_id": "6ab0d3825e2e3f20faff315f",
+        "source_scene": "unknown"
+      }
+    }
+  }
+}
