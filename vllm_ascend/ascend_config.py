@@ -331,6 +331,7 @@ class AscendConfig:
             "enable_cpu_binding": true,
             "multistream_dsv4_dsa_overlap": true,
             "enable_prefill_mc2": false,
+            "gdn_prefill_backend": "auto",
             "multistream_overlap_shared_expert": false,
             "enable_kv_nz": false,
             "enable_mc2_hierarchy_comm": false,
@@ -467,6 +468,7 @@ class AscendConfig:
     enable_cpu_binding: bool = True
     multistream_dsv4_dsa_overlap: bool = True
     enable_prefill_mc2: bool = False
+    gdn_prefill_backend: Literal["auto", "native", "fla_npu"] = "auto"
     multistream_overlap_shared_expert: bool = False
     enable_kv_nz: bool = False
     enable_mc2_hierarchy_comm: bool = False  # deprecated, will be replaced by mc2_comm_alg = "hierarchy"
@@ -542,9 +544,20 @@ class AscendConfig:
     _sparse_li_c8_layer_names: set[str] = dataclasses.field(default_factory=set, init=False, repr=False)
     _sparse_li_c8_layer_filter_enabled: bool = dataclasses.field(default=False, init=False, repr=False)
     _c8_reshape_optim_enabled: bool = dataclasses.field(default=False, init=False, repr=False)
+    gdn_prefill_op: Any = dataclasses.field(default=None, init=False, repr=False)
 
     @model_validator(mode="after")
     def _validate_user_input_ranges(self):
+        if self.gdn_prefill_backend == "fla_npu":
+            try:
+                from fla_npu.ops.ascendc import chunk_gated_delta_rule_fwd
+            except ImportError as exc:
+                raise RuntimeError(
+                    "gdn_prefill_backend='fla_npu' requires a current "
+                    "flash-linear-attention-npu wheel providing "
+                    "fla_npu.ops.ascendc.chunk_gated_delta_rule_fwd."
+                ) from exc
+            self.gdn_prefill_op = chunk_gated_delta_rule_fwd
         if self.weight_nz_mode not in (0, 1, 2):
             raise ValueError(f"weight_nz_mode must be one of 0, 1, or 2; got {self.weight_nz_mode}")
         # TODO(zzzzwwjj): remove it after deprecating `enable_mc2_hierarchy_comm`.
@@ -1573,17 +1586,31 @@ def init_ascend_config(vllm_config: VllmConfig) -> AscendConfig:
     # CUDA-only values (flashinfer/cutedsl for GDN, flashkda for KDA) have no
     # kernel on Ascend. Strip the keys here so extra="forbid" does not reject
     # them as typos, and warn only when the user requested an unsupported value.
-    _TRITON_COMPATIBLE_VALUES = ("auto", "triton")
-    for _prefill_key in ("gdn_prefill_backend", "kda_prefill_backend"):
-        _prefill_value = additional_config.get(_prefill_key)
-        if _prefill_value is not None and str(_prefill_value).strip().lower() not in _TRITON_COMPATIBLE_VALUES:
-            logger.warning_once(
-                "Ascend does not support %s=%r; only the 'triton' value is "
-                "available on Ascend for GDN/KDA prefill (FLA kernels run via "
-                "triton-ascend). The option is ignored.",
-                _prefill_key,
-                _prefill_value,
-            )
+    # NOTE: gdn_prefill_backend is a real AscendConfig field (PR #16420) with
+    # its own 'auto'/'native'/'fla_npu' domain; only upstream-injected values
+    # outside that domain (e.g. 'triton' from EngineArgs) are sanitized.
+    # kda_prefill_backend is not an AscendConfig field and is always stripped.
+    _GDN_PREFILL_ALLOWED_VALUES = ("auto", "native", "fla_npu")
+    _gdn_prefill_stripped = False
+    _gdn_value = additional_config.get("gdn_prefill_backend")
+    if _gdn_value is not None and str(_gdn_value).strip().lower() not in _GDN_PREFILL_ALLOWED_VALUES:
+        logger.warning_once(
+            "Ascend does not support gdn_prefill_backend=%r; supported values "
+            "are 'auto', 'native' and 'fla_npu'. The option is ignored.",
+            _gdn_value,
+        )
+        # Out-of-domain values (e.g. upstream-injected 'triton') must still be
+        # stripped below, otherwise pydantic's Literal validation would raise.
+        _gdn_prefill_stripped = True
+    _KDA_TRITON_COMPATIBLE_VALUES = ("auto", "triton")
+    _kda_value = additional_config.get("kda_prefill_backend")
+    if _kda_value is not None and str(_kda_value).strip().lower() not in _KDA_TRITON_COMPATIBLE_VALUES:
+        logger.warning_once(
+            "Ascend does not support kda_prefill_backend=%r; only the 'triton' value is "
+            "available on Ascend for KDA prefill (FLA kernels run via "
+            "triton-ascend). The option is ignored.",
+            _kda_value,
+        )
 
     refresh = validate_additional_config_bool(additional_config.get("refresh", False), "additional_config.refresh")
     raw_rl_config = additional_config.get("rl_config", {})
@@ -1620,12 +1647,13 @@ def init_ascend_config(vllm_config: VllmConfig) -> AscendConfig:
     _NON_USER_INPUT_KEYS = {
         # control-flow flag (singleton/cache refresh), not a configuration field
         "refresh",
-        # Upstream-injected by EngineArgs for the generic GDN/KDA prefill
-        # backend selector; Ascend supports only the triton value (FLA kernels
-        # run via triton-ascend), and the triton default applies either way
-        # (warned above when the user requested a CUDA-only value). Strip
-        # instead of letting extra="forbid" report them as typos.
-        "gdn_prefill_backend",
+        # Upstream-injected by EngineArgs for the generic KDA prefill backend
+        # selector; kda_prefill_backend is not an AscendConfig field (only the
+        # generic Triton pipeline exists on Ascend), so strip it instead of
+        # letting extra="forbid" report it as a typo.
+        # gdn_prefill_backend is deliberately NOT stripped: it is a real
+        # AscendConfig field (PR #16420). Values outside 'auto'/'native'/
+        # 'fla_npu' (e.g. upstream-injected 'triton') are sanitized above.
         "kda_prefill_backend",
         # Consumed in derive_and_validate as the SP MoE switch. Not an
         # AscendConfig field, so strip it before extra="forbid" validation.
@@ -1661,6 +1689,8 @@ def init_ascend_config(vllm_config: VllmConfig) -> AscendConfig:
         "profiling_chunk_config",
         "batch_job_sched_config",
     }
+    if _gdn_prefill_stripped:
+        _NON_USER_INPUT_KEYS = _NON_USER_INPUT_KEYS | {"gdn_prefill_backend"}
     kwargs = {k: v for k, v in additional_config.items() if k not in _NON_USER_INPUT_KEYS}
     unknown_keys = sorted(set(kwargs) - AscendConfig.__dataclass_fields__.keys())
     # vLLM-Omni shares this mapping with the platform plugin. Preserve its
