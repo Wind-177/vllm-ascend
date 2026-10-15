@@ -91,29 +91,54 @@ def _config(
         kv_transfer_config=connector,
         speculative_config=(None if speculative_method is None else SimpleNamespace(method=speculative_method)),
         cache_config=SimpleNamespace(
+            cache_dtype="auto",
             block_size=128,
             mamba_page_size_padded=8192,
             mamba_cache_mode=mamba_cache_mode,
             enable_prefix_caching=prefix_caching,
             mamba_block_size=None,
         ),
-        model_config=SimpleNamespace(max_model_len=4096),
+        parallel_config=SimpleNamespace(tensor_parallel_size=2),
+        model_config=SimpleNamespace(
+            architecture="DummyDenseHybridModel",
+            use_mla=False,
+            dtype=torch.bfloat16,
+            max_model_len=4096,
+            hf_text_config=SimpleNamespace(),
+            hf_config=SimpleNamespace(),
+            get_num_kv_heads=lambda _parallel_config: 2,
+            get_head_size=lambda: 128,
+        ),
     )
 
 
 def _run(config):
-    with patch.object(MambaModelConfig, "verify_and_update_config") as upstream:
+    model_cls = SimpleNamespace(
+        get_mamba_state_shape_from_config=lambda _config: ((4, 8), (4, 128, 128)),
+        get_mamba_state_dtype_from_config=lambda _config: (torch.bfloat16, torch.float32),
+    )
+    resolve = (
+        patch(
+            "vllm_ascend.patch.platform.patch_mamba_config.ModelRegistry.resolve_model_cls",
+            return_value=(model_cls, None),
+        )
+        if config.model_config.architecture == "DummyDenseHybridModel"
+        else nullcontext()
+    )
+    with resolve, patch.object(MambaModelConfig, "verify_and_update_config") as upstream:
         HybridAttentionMambaModelConfig.verify_and_update_config(config)
     upstream.assert_called_once_with(config)
 
 
-def test_hybrid_config_preserves_noncontiguous_page_sizes():
+def test_hybrid_config_restores_contiguous_state_page_alignment():
     config = _config()
 
     _run(config)
 
-    assert config.cache_config.block_size == 128
-    assert config.cache_config.mamba_page_size_padded == 8192
+    # One K page covers the FP32 recurrent state; the physical Mamba page
+    # also reserves the V page and the BF16 convolution state, as before #14340.
+    assert config.cache_config.block_size == 512
+    assert config.cache_config.mamba_page_size_padded == 2 * 262144 + 64
     assert config.cache_config.mamba_block_size == 4096
 
 
@@ -309,8 +334,5 @@ def test_kv_store_rejects_non_align_explicit_mode():
         mamba_cache_mode="all",
     )
 
-    with (
-        patch.object(MambaModelConfig, "verify_and_update_config"),
-        pytest.raises(AssertionError, match="only support 'align'"),
-    ):
-        HybridAttentionMambaModelConfig.verify_and_update_config(config)
+    with pytest.raises(AssertionError, match="only support 'align'"):
+        _run(config)

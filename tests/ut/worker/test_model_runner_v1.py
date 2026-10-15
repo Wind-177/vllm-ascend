@@ -1248,7 +1248,7 @@ class TestNPUModelRunnerKVCache(unittest.TestCase):
                     caches = runner._reshape_kv_cache_tensors(cache_config, raw)
                 assert_attention_cache_views(caches, raw, packed)
 
-    def test_hybrid_noncontiguous_reshape_uses_per_group_kernel_sizes(self):
+    def test_hybrid_contiguous_reshape_uses_per_group_kernel_sizes(self):
         runner = self._build_runner()
         runner.hybrid_with_attn_and_mamba = True
         runner.use_hybrid_blocks = True
@@ -1322,14 +1322,30 @@ class TestNPUModelRunnerKVCache(unittest.TestCase):
         assert len(caches["full_attn"]) == 2
         for cache in caches["full_attn"]:
             assert cache.shape == (4, 4, 1, 2)
-            assert cache.stride() == (16, 2, 2, 1)
+            assert cache.stride() == (8, 2, 2, 1)
+            assert cache.is_contiguous()
         conv_state, ssm_state = caches["linear_attn"]
         assert conv_state.shape == (2, 3)
         assert ssm_state.shape == (2, 5)
-        assert conv_state.stride() == (16, 1)
-        assert ssm_state.stride() == (16, 1)
+        assert conv_state.stride() == (3, 1)
+        assert ssm_state.stride() == (5, 1)
+        assert conv_state.is_contiguous()
+        assert ssm_state.is_contiguous()
         assert conv_state.storage_offset() == 0
-        assert ssm_state.storage_offset() == 3
+        assert ssm_state.storage_offset() == 6
+        # These are disjoint views over the original allocation, not extra
+        # copies of the complete state or Attention cache.
+        key_cache, value_cache = caches["full_attn"]
+        key_cache.fill_(1)
+        value_cache.fill_(2)
+        conv_state.fill_(3)
+        ssm_state.fill_(4)
+        assert torch.all(key_cache == 1)
+        assert torch.all(value_cache == 2)
+        expected_states = torch.tensor([3] * 6 + [4] * 10, dtype=torch.float16)
+        torch.testing.assert_close(raw_caches["linear_attn"][:32].view(torch.float16), expected_states)
+        assert key_cache.untyped_storage().data_ptr() == raw_caches["full_attn"].untyped_storage().data_ptr()
+        assert value_cache.untyped_storage().data_ptr() == raw_caches["full_attn"].untyped_storage().data_ptr()
         attention_backend.get_kv_cache_shape.assert_any_call(
             4,
             4,

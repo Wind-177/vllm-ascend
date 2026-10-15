@@ -4992,8 +4992,11 @@ class NPUModelRunner(GPUModelRunner):
         # `or is_step_model` overlay gate below.
         is_step_model = self.model_config.hf_text_config.model_type in ("step3p5", "step3p7")
         strided_attention_cache_layers: set[str] = set()
+        # Issue #18615: retain the new pure-GQA path, but restore the legacy
+        # contiguous cache layout for hybrid Attention/Mamba models.
         if (
-            not self.use_dcp
+            not self.hybrid_with_attn_and_mamba
+            and not self.use_dcp
             and not self.use_sparse
             and not self.use_compress
             and not self.sparse_kv_offload_enabled
@@ -5719,6 +5722,7 @@ class NPUModelRunner(GPUModelRunner):
                     )
                     if (
                         raw_kv_is_combined
+                        and not self.hybrid_with_attn_and_mamba
                         and len(kv_cache_shape) == 5
                         and kv_cache_shape[0] == 2
                     ):
@@ -5892,43 +5896,8 @@ class NPUModelRunner(GPUModelRunner):
                     # different GPUs, and `kv_cache_config.num_blocks` is set to
                     # the min of all `num_blocks`. Verify it here.
 
-                    uses_same_raw_tensor = any(
-                        other_layer_name != layer_name
-                        and other_raw_tensor is raw_tensor
-                        for other_layer_name, other_raw_tensor in (
-                            kv_cache_raw_tensors.items()
-                        )
-                    )
-                    if (
-                        self.hybrid_with_attn_and_mamba
-                        and not uses_same_raw_tensor
-                    ):
-                        shapes_with_blocks = tuple(
-                            (num_blocks, *shape)
-                            for shape in current_kv_cache_spec.shapes
-                        )
-                        state_tensors = self._adjust_kv_layout(
-                            raw_tensor,
-                            shapes_with_blocks,
-                            current_kv_cache_spec.dtypes,
-                            current_kv_cache_spec.page_size_bytes,
-                        )
-                        kv_caches[layer_name] = state_tensors
-                        # TODO: Remove this temporary observation point once
-                        # the non-contiguous KV-cache layout is mature.
-                        logger.debug(
-                            "[non-contiguous-kv-cache] mamba mode=hybrid "
-                            "layer=%s page_size_bytes=%s shapes=%s strides=%s "
-                            "storage_offsets=%s contiguous=%s",
-                            layer_name,
-                            current_kv_cache_spec.page_size_bytes,
-                            [tuple(tensor.shape) for tensor in state_tensors],
-                            [tensor.stride() for tensor in state_tensors],
-                            [tensor.storage_offset() for tensor in state_tensors],
-                            [tensor.is_contiguous() for tensor in state_tensors],
-                        )
-                        continue
-
+                    # Issue #18615: use the pre-#14340 contiguous state layout
+                    # together with the restored Attention/Mamba page alignment.
                     state_tensors = []
                     target_idx = 0
                     start_idx = 0
@@ -5951,6 +5920,17 @@ class NPUModelRunner(GPUModelRunner):
                 else:
                     raise ValueError("Unknown KV cache spec type.")
 
+        if self.hybrid_with_attn_and_mamba:
+            logger.info("Issue #18615 validation: Model Runner V1 hybrid cache layout rollback is active.")
+            for layer_name, cache in kv_caches.items():
+                tensors = (cache,) if isinstance(cache, torch.Tensor) else cache
+                logger.debug(
+                    "[issue-18615-rollback] layer=%s shapes=%s strides=%s contiguous=%s",
+                    layer_name,
+                    [tuple(tensor.shape) for tensor in tensors],
+                    [tensor.stride() for tensor in tensors],
+                    [tensor.is_contiguous() for tensor in tensors],
+                )
         return kv_caches
 
     def may_reinitialize_input_batch(
