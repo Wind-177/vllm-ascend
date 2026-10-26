@@ -235,6 +235,8 @@ csrc/third_party/
 .cursor/
 .aider*
 .windsurf/
+.codex/
+.codemate/
 
 # local build cache
 .vllm_ascend/

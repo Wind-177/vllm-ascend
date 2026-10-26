@@ -110,6 +110,7 @@ class TestTorchNPUProfilerWrapper(TestBase):
         profile_kwargs = mock_profile.call_args.kwargs
         self.assertEqual(profile_kwargs["activities"], ["CPU", "NPU"])
         self.assertTrue(profile_kwargs["profile_memory"])
+        self.assertTrue(profile_kwargs["with_stack"])
         self.assertEqual(profile_kwargs["with_modules"], True)
         self.assertEqual(profile_kwargs["on_trace_ready"], mock_trace_handler_instance)
         self.assertEqual(result, mock_profiler_instance)
@@ -193,6 +194,10 @@ class TestTorchNPUProfilerWrapper(TestBase):
         TorchNPUProfilerWrapper._create_profiler(profiler_config, "test_trace")
 
         mock_profile.assert_called_once()
+        self.assertEqual(
+            mock_profile.call_args.kwargs["with_stack"],
+            profiler_config.torch_profiler_with_stack,
+        )
 
     @patch("vllm_ascend.profiler.torch_npu_profiler.get_ascend_config")
     def test_create_profiler_config_enables_msmonitor(self, mock_get_ascend_config):

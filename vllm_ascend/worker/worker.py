@@ -110,7 +110,6 @@ from vllm_ascend.utils import (
     enable_custom_op,
     enable_sp,
     register_ascend_customop,
-    register_ascend_fla_customop,
     register_device_print,
     setup_ascend_local_comm_res,
 )
@@ -547,11 +546,6 @@ class NPUWorker(WorkerBase):
         # in ray scenario. see https://github.com/vllm-project/vllm/pull/26845
         # for more details
         self.device = self._init_device()
-        # FLA import-time capability queries must run on the selected worker
-        # device, and registration must finish before any model is constructed.
-        # TODO: Drop this separate call when supported vLLM FLA or Triton Ascend
-        # versions fix import-time NPU init and general registration is restored.
-        register_ascend_fla_customop()
         # Initialize workspace manager
         num_ubatches = 1
         init_workspace_manager(self.device, num_ubatches)
@@ -778,6 +772,24 @@ class NPUWorker(WorkerBase):
         # are, remove this is_step_model exemption: this line and the
         # `or is_step_model` budget gate below.
         is_step_model = self.model_config.hf_text_config.model_type in ("step3p5", "step3p7")
+        if (
+            has_attention
+            and has_mamba
+            and getattr(layout, "is_block_outermost", False)
+            and self.vllm_config.kv_transfer_config is None
+            and getattr(
+                model_runner,
+                "supports_page_strided_shared_kv_backing",
+                False,
+            )
+        ):
+            # Main's block-outermost descriptors all address one physical
+            # page-strided backing. In particular, Qwen4Exp's compressed QSA
+            # descriptors describe logical views into that allocation; they
+            # are not independent per-layer buffers. Preserve the profiler's
+            # full budget so the planner derives num_blocks from the packed
+            # physical page size rather than scaling it once per group.
+            return available_memory
         if (
             has_attention
             and (has_mamba or is_step_model)

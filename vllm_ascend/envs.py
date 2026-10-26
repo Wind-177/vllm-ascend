@@ -29,6 +29,26 @@ from typing import Any
 
 
 env_variables: dict[str, Callable[[], Any]] = {
+    # Experimental same-stream early queue for fixed K3 Qwen async decode.
+    # Audited text-only QSA/GDN/PLE decode defers the CPU length wait until
+    # the existing post-main request-state callback; other paths retain it.
+    # Only captured taskless graphs with fixed input addresses and same-stream
+    # ownership may also skip the redundant host replay barrier.
+    # Default: False; valid values: 0/1; non-sensitive. Other paths fall back.
+    "VLLM_ASCEND_EARLY_DECODE_QUEUE": lambda: bool(
+        int(os.getenv("VLLM_ASCEND_EARLY_DECODE_QUEUE", "0"))
+    ),
+    # Stage PLE CPU metadata in adapter-owned pinned memory for async H2D.
+    # Default: False; valid values: 0/1; non-sensitive performance switch.
+    "VLLM_ASCEND_ASYNC_PLE_INPUTS": lambda: bool(
+        int(os.getenv("VLLM_ASCEND_ASYNC_PLE_INPUTS", "0"))
+    ),
+    # Allow async sampled-output D2H to depend on its producer event rather
+    # than subsequent draft-model work. Default: False; valid values: 0/1.
+    # This is a non-sensitive experimental performance switch.
+    "VLLM_ASCEND_ASYNC_OUTPUT_EARLY_COPY": lambda: bool(
+        int(os.getenv("VLLM_ASCEND_ASYNC_OUTPUT_EARLY_COPY", "0"))
+    ),
     # max compile thread number for package building. Usually, it is set to
     # the number of CPU cores. If not set, the default value is None, which
     # means all number of CPU cores will be used.

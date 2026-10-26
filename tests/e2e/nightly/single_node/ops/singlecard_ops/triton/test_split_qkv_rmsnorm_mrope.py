@@ -322,3 +322,20 @@ def test_split_qkv_rmsnorm_mrope(
     gc.collect()
     torch.npu.empty_cache()
     torch.npu.reset_peak_memory_stats()
+
+
+@pytest.mark.parametrize("num_tokens", [1, 17, 512])
+def test_qwen4_exp_tp4_fused_norm_rope(num_tokens: int):
+    """TP4 uses six local Q heads with the Qwen4Exp gated partial MRoPE layout."""
+    test_split_qkv_rmsnorm_mrope(
+        num_tokens=num_tokens,
+        num_q_heads=6,
+        num_kv_heads=1,
+        head_size=256,
+        mrope_section=[11, 11, 10],
+        eps=1e-6,
+        dtype=torch.bfloat16,
+        device="npu:0",
+        is_interleaved=True,
+        has_gate=True,
+    )
