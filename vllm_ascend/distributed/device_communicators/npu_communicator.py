@@ -74,7 +74,9 @@ class NPUCommunicator(DeviceCommunicatorBase):
         quantized_cfg = get_ascend_config().quantized_all_reduce_config
         self.quantized_ar: QuantizedAllReduce | None = None
         if quantized_cfg.enable:
-            self.quantized_ar = QuantizedAllReduce(self.device_group, min_numel=quantized_cfg.min_numel)
+            self.quantized_ar = QuantizedAllReduce(
+                self.device_group, min_numel=quantized_cfg.min_numel, group_name=self.unique_name
+            )
             if self.quantized_ar.supported:
                 # Once per worker process: every group constructs a wrapper, but
                 # only the TP-sized ones actually enable the int8 path.

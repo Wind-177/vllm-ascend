@@ -52,7 +52,13 @@ Enable it through ``--additional-config`` (see vllm_ascend.ascend_config):
   The setting is read when the TP communicator is created (server start-up) and
   is active when every TP worker logs
   "Quantized all-reduce enabled (min_numel=..., max_q=...)".
+  To diagnose actual calls, set VLLM_LOGGING_LEVEL=DEBUG before starting the
+  server and look for QAR-HIT and QAR-SKIP. These Python logs may also appear
+  during warmup or graph capture and do not count graph replays. Disable debug
+  logging for performance measurements.
 """
+
+import logging
 
 import torch
 import torch.distributed as dist
@@ -73,8 +79,9 @@ _MAX_VALID_WORLD_SIZE = 8
 class QuantizedAllReduce:
     """Wrapper adding int8 quantized all-reduce around a base all_reduce."""
 
-    def __init__(self, group: "dist.ProcessGroup", min_numel: int) -> None:
+    def __init__(self, group: "dist.ProcessGroup", min_numel: int, group_name: str = "") -> None:
         self.group = group
+        self.group_name = group_name
         self.world_size = dist.get_world_size(group)
         device_type = get_ascend_device_type()
         # Fail fast on unvalidated families: a silent bf16 fallback would hide
@@ -107,11 +114,48 @@ class QuantizedAllReduce:
                 self.world_size,
                 _MAX_VALID_WORLD_SIZE,
             )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "[QAR-SKIP] reason=unsupported_group group=%s world_size=%d shape=%s dtype=%s "
+                    "numel=%d min_numel=%d",
+                    self.group_name,
+                    self.world_size,
+                    tuple(input_.shape),
+                    input_.dtype,
+                    input_.numel(),
+                    self.min_numel,
+                )
             dist.all_reduce(input_, group=self.group)
             return input_
         if input_.dtype != torch.bfloat16 or input_.numel() < self.min_numel:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "[QAR-SKIP] reason=%s group=%s world_size=%d shape=%s dtype=%s "
+                    "numel=%d min_numel=%d",
+                    "dtype" if input_.dtype != torch.bfloat16 else "below_threshold",
+                    self.group_name,
+                    self.world_size,
+                    tuple(input_.shape),
+                    input_.dtype,
+                    input_.numel(),
+                    self.min_numel,
+                )
             dist.all_reduce(input_, group=self.group)
             return input_
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[QAR-HIT] group=%s world_size=%d shape=%s dtype=%s numel=%d "
+                "payload_bytes=%d min_numel=%d max_q=%d",
+                self.group_name,
+                self.world_size,
+                tuple(input_.shape),
+                input_.dtype,
+                input_.numel(),
+                input_.numel() * input_.element_size(),
+                self.min_numel,
+                self.max_q,
+            )
 
         # [*, C] view: the last dim carries the channels that share a scale.
         flat = input_.reshape(-1, input_.shape[-1])

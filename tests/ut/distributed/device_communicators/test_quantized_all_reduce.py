@@ -160,6 +160,30 @@ class TestQuantizedAllReduce(unittest.TestCase):
             second_call = mock_ar.call_args_list[1]
             self.assertEqual(second_call.args[0].dtype, torch.int8)
 
+    def test_debug_logs_identify_quantized_and_fallback_calls(self):
+        wrapper = _make(world_size=2, min_numel=8)
+        wrapper.group_name = "tp:0"
+        cases = (
+            (torch.ones(2, 4, dtype=torch.bfloat16), "[QAR-HIT]", "payload_bytes=16"),
+            (torch.ones(2, 3, dtype=torch.bfloat16), "[QAR-SKIP]", "reason=below_threshold"),
+            (torch.ones(2, 4, dtype=torch.float16), "[QAR-SKIP]", "reason=dtype"),
+        )
+        for x, marker, expected in cases:
+            with self.subTest(marker=marker, dtype=x.dtype, shape=x.shape):
+                with (
+                    patch("vllm_ascend.distributed.device_communicators.quantized_all_reduce.logger") as mock_logger,
+                    patch("torch.distributed.all_reduce"),
+                    patch("torch_npu.npu_quantize", create=True, return_value=torch.zeros_like(x, dtype=torch.int8)),
+                    patch("torch_npu.npu_anti_quant", create=True, return_value=torch.zeros_like(x)),
+                ):
+                    mock_logger.isEnabledFor.return_value = True
+                    wrapper.all_reduce(x)
+                args = mock_logger.debug.call_args.args
+                message = args[0] % args[1:]
+                self.assertIn(marker, message)
+                self.assertIn(expected, message)
+                self.assertIn("group=tp:0 world_size=2", message)
+
     def test_exact_bound_scale_never_wraps(self):
         """Same-sign worst case: every element equals the per-channel amax.
 
