@@ -52,10 +52,12 @@ Enable it through ``--additional-config`` (see vllm_ascend.ascend_config):
   The setting is read when the TP communicator is created (server start-up) and
   is active when every TP worker logs
   "Quantized all-reduce enabled (min_numel=..., max_q=...)".
-  To diagnose actual calls, set VLLM_LOGGING_LEVEL=DEBUG before starting the
-  server and look for QAR-HIT and QAR-SKIP. These Python logs may also appear
-  during warmup or graph capture and do not count graph replays. Disable debug
-  logging for performance measurements.
+  To diagnose actual calls, add the following to the same --additional-config:
+  "runtime_config": {"ascend_log": {"debug":
+  ["distributed.device_communicators.quantized_all_reduce"]}}
+  Look for QAR-HIT and QAR-SKIP. These Python logs may also appear during
+  warmup or graph capture and do not count graph replays. Disable debug logging
+  for performance measurements.
 """
 
 import logging
@@ -63,10 +65,12 @@ import logging
 import torch
 import torch.distributed as dist
 import torch_npu  # noqa: F401
-from vllm.logger import logger
 
 from vllm_ascend.device.device_config import get_ascend_device_type
 from vllm_ascend.device.hardware import AscendDeviceType
+from vllm_ascend.logger import init_logger_ascend
+
+logger = init_logger_ascend(__name__)
 
 # Validated on A2 (910B, measured end to end); A3 (910C) supports the kernels
 # but its int8 reduce behaviour is unmeasured.

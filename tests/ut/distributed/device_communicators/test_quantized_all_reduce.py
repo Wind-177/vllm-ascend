@@ -40,6 +40,7 @@ import torch
 from vllm_ascend.device.hardware import AscendDeviceType
 from vllm_ascend.distributed.device_communicators.quantized_all_reduce import (
     QuantizedAllReduce,
+    logger as qar_logger,
 )
 
 
@@ -62,6 +63,9 @@ def _make(
 
 
 class TestQuantizedAllReduce(unittest.TestCase):
+    def test_debug_logger_has_module_name(self):
+        self.assertEqual(qar_logger.name, "vllm_ascend.distributed.device_communicators.quantized_all_reduce")
+
     def test_min_numel_from_config(self):
         wrapper = _make(min_numel=12345)
         self.assertEqual(wrapper.min_numel, 12345)
