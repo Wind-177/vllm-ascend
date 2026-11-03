@@ -13,6 +13,7 @@ import os
 import socket
 import statistics
 import time
+import unicodedata
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
@@ -241,6 +242,80 @@ def _benchmark_case(pipeline: Int8AllReduce, source: torch.Tensor, args: argpars
     return case
 
 
+def _table(headers: list[str], rows: list[list[str]]) -> str:
+    """Render aligned Markdown columns, accounting for Chinese display width."""
+
+    def width(value):
+        return sum(2 if unicodedata.east_asian_width(char) in ("W", "F") else 1 for char in value)
+
+    widths = [max(width(row[index]) for row in [headers, *rows]) for index in range(len(headers))]
+
+    def line(row):
+        return "| " + " | ".join(value + " " * (size - width(value)) for value, size in zip(row, widths)) + " |"
+
+    return "\n".join([line(headers), line(["-" * size for size in widths]), *(line(row) for row in rows)])
+
+
+def format_report(report: dict, breakdown: bool = False) -> str:
+    groups: dict[int, list] = {}
+    for case in report["cases"]:
+        groups.setdefault(case["shape"][1], []).append(case)
+    lines = ["", f"INT8 all-reduce 测试结果 | TP={report['world_size']} | device={report['device']}"]
+    lines.append("耗时为完整路径的中位数；输入重置不计入；每个样本取最慢 rank。")
+    for hidden, cases in groups.items():
+        lines.extend(["", f"hidden_size = {hidden}", ""])
+        rows = []
+        for case in cases:
+            gain = case["latency_reduction_pct"]
+            change = f"{'下降' if gain > 0 else '增加'} {abs(gain):.2f}%" if gain != 0 else "持平"
+            rows.append(
+                [
+                    str(case["shape"][0]),
+                    f"{case['bf16_payload_mib']:.2f}",
+                    f"{case['bf16']['median_ms']:.4f}",
+                    f"{case['int8']['median_ms']:.4f}",
+                    f"{case['speedup']:.3f}x",
+                    change,
+                ]
+            )
+        lines.append(
+            _table(["Tokens", "BF16 通信量(MiB)", "BF16 耗时(ms)", "INT8 完整耗时(ms)", "加速比", "延迟变化"], rows)
+        )
+        lines.extend(["", "误差与额外内存（误差相对 FP32 SUM）：", ""])
+        lines.append(
+            _table(
+                ["Tokens", "相对 L2 误差", "最大绝对误差", "INT8 额外峰值(MiB)"],
+                [
+                    [
+                        str(case["shape"][0]),
+                        f"{case['accuracy']['int8_relative_l2_vs_fp32'] * 100:.3f}%",
+                        f"{case['accuracy']['int8_max_abs_vs_fp32']:.6f}",
+                        f"{case['int8']['extra_peak_allocated_mib']:.2f}",
+                    ]
+                    for case in cases
+                ],
+            )
+        )
+    if breakdown:
+        lines.extend(["", "阶段耗时诊断（ms；独立测量，各列中位数之和不等于完整耗时）："])
+        for hidden, cases in groups.items():
+            diagnostic_cases = [case for case in cases if "stage_diagnostics" in case]
+            if not diagnostic_cases:
+                continue
+            lines.extend(["", f"hidden_size = {hidden}", ""])
+            lines.append(
+                _table(
+                    ["Tokens", "本地 amax", "amax 同步", "尺度+量化", "INT8 通信", "反量化+写回"],
+                    [
+                        [str(case["shape"][0])]
+                        + [f"{case['stage_diagnostics'][stage]['median_ms']:.4f}" for stage in _STAGES]
+                        for case in diagnostic_cases
+                    ],
+                )
+            )
+    return "\n".join(lines)
+
+
 def _parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tokens", nargs="+", type=int, default=[512, 2048, 8192, 16384])
@@ -255,6 +330,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--timeout-seconds", type=int, default=300)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--report-json", type=Path, help="Print tables from an existing result JSON without running NPUs."
+    )
     args = parser.parse_args(argv)
     if (
         any(value < 1 for value in (*args.tokens, *args.hidden_sizes))
@@ -269,6 +347,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    if args.report_json:
+        print(format_report(json.loads(args.report_json.read_text(encoding="utf-8")), args.breakdown), flush=True)
+        return
     # Load the backend in the NPU worker only: --help and CPU unit tests do
     # not need an Ascend installation.
     import torch_npu
@@ -300,13 +381,18 @@ def main() -> None:
             "cases": [],
         }
         if rank == 0:
-            print(json.dumps({key: value for key, value in report.items() if key != "cases"}, indent=2), flush=True)
+            print(
+                f"device={report['device']} | TP={world_size} | max_q={pipeline.max_q}\n"
+                f"torch={report['torch']} | torch_npu={report['torch_npu']} | "
+                f"quant={args.quant_backend} | dequant={args.dequant_backend} | amax={args.amax_method}\n"
+                f"warmup={args.warmup} | iterations={args.iterations} | rounds={args.rounds}",
+                flush=True,
+            )
         for name, value in (("zeros", 0.0), ("same_sign_overflow_boundary", 1.0)):
             _check(pipeline, torch.full((64, 128), value, dtype=torch.bfloat16, device=device))
             if rank == 0:
                 print(f"Correctness {name}: PASS", flush=True)
-        if rank == 0:
-            print("tokens hidden BF16_MiB BF16_ms INT8_full_ms speedup gain_pct relative_L2 extra_INT8_MiB", flush=True)
+        total_cases = len(args.hidden_sizes) * len(args.tokens)
         for hidden in args.hidden_sizes:
             for tokens in args.tokens:
                 torch.manual_seed(args.seed + rank)
@@ -316,22 +402,16 @@ def main() -> None:
                 del source
                 if rank == 0:
                     print(
-                        f"{tokens} {hidden} {case['bf16_payload_mib']:.2f} "
-                        f"{case['bf16']['median_ms']:.4f} {case['int8']['median_ms']:.4f} "
-                        f"{case['speedup']:.3f} {case['latency_reduction_pct']:+.2f} "
-                        f"{case['accuracy']['int8_relative_l2_vs_fp32']:.6f} "
-                        f"{case['int8']['extra_peak_allocated_mib']:.2f}",
+                        f"完成 {len(report['cases'])}/{total_cases}：hidden_size={hidden}, tokens={tokens}",
                         flush=True,
                     )
-                    if args.breakdown:
-                        print(
-                            "Stage medians (diagnostic): "
-                            + json.dumps({key: value["median_ms"] for key, value in case["stage_diagnostics"].items()}),
-                            flush=True,
-                        )
                     if args.output:
                         args.output.parent.mkdir(parents=True, exist_ok=True)
                         args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        if rank == 0:
+            print(format_report(report, args.breakdown), flush=True)
+            if args.output:
+                print(f"\n完整结果已保存：{args.output}", flush=True)
     finally:
         dist.destroy_process_group()
 

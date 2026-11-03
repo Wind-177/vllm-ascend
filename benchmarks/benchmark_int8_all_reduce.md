@@ -41,11 +41,26 @@ BF16 输入大小为 `tokens * hidden_size * 2` 字节。例如 hidden size 2048
 
 ## 结果含义
 
-终端每个形状输出一行：
+测试完成后，终端按 hidden size 分组输出对比表；阶段耗时单独成表，不穿插 JSON：
 
 ```text
-tokens hidden BF16_MiB BF16_ms INT8_full_ms speedup gain_pct relative_L2 extra_INT8_MiB
+hidden_size = 2048
+
+| Tokens | BF16 通信量(MiB) | BF16 耗时(ms) | INT8 完整耗时(ms) | 加速比 | 延迟变化     |
+| ------ | ---------------- | ------------- | ----------------- | ------ | ------------ |
+| 512    | 2.00             | 0.0773        | 0.2139            | 0.362x | 增加 176.62% |
+| 16384  | 64.00            | 1.3987        | 0.8405            | 1.664x | 下降 39.91%  |
 ```
+
+上述数值仅示范输出格式。误差与额外内存也会单独成表，其中相对 L2 误差显示为百分比。JSON 字段和数值单位保持原样。
+
+已经跑完并保存的 JSON 可以直接转换成表格，无需重跑多卡测试：
+
+```bash
+python3 benchmarks/benchmark_int8_all_reduce.py --report-json int8_tp2.json --breakdown
+```
+
+测试过程中只输出简短进度；运行环境摘要与正确性检查结果保留。PyTorch/HCCL 自身的 warning 不被屏蔽。
 
 - `BF16_ms`：原生 BF16 SUM all-reduce 的中位数耗时。
 - `INT8_full_ms`：本地 absmax、FP32 MAX all-reduce、尺度计算与量化、INT8 SUM all-reduce、反量化与结果写回的完整中位数耗时。
